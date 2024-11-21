@@ -2,7 +2,7 @@ version: "3.9"
 services:
   hummingbot:
     container_name: hummingbot
-    image: hummingbot/hummingbot:latest
+    image: hummingbot/hummingbot:latest_dydx
 #    build: Uncomment this and comment image if you want to build it locally
 #      context: .
 #      dockerfile: Dockerfile

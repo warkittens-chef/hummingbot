@@ -87,11 +87,13 @@ class FundingRateArbitrageConfig(StrategyV2ConfigBase):
 class FundingRateArbitrage(StrategyV2Base):
     quote_markets_map = {
         "hyperliquid_perpetual": "USD",
-        "binance_perpetual": "USDT"
+        "binance_perpetual": "USDT",
+        "dydx_v4_perpetual": "USD"
     }
     funding_payment_interval_map = {
         "binance_perpetual": 60 * 60 * 8,
-        "hyperliquid_perpetual": 60 * 60 * 1
+        "hyperliquid_perpetual": 60 * 60 * 1,
+        "dydx_v4_perpetual": 60 * 60 * 1
     }
     funding_profitability_interval = 60 * 60 * 24
 
@@ -125,7 +127,7 @@ class FundingRateArbitrage(StrategyV2Base):
     def apply_initial_setting(self):
         for connector_name, connector in self.connectors.items():
             if self.is_perpetual(connector_name):
-                position_mode = PositionMode.ONEWAY if connector_name == "hyperliquid_perpetual" else PositionMode.HEDGE
+                position_mode = PositionMode.ONEWAY if connector_name in ["hyperliquid_perpetual", "dydx_v4_perpetual"] else PositionMode.HEDGE
                 connector.set_position_mode(position_mode)
                 for trading_pair in self.market_data_provider.get_trading_pairs(connector_name):
                     connector.set_leverage(trading_pair, self.config.leverage)
@@ -225,7 +227,7 @@ class FundingRateArbitrage(StrategyV2Base):
                         token, connector_1, connector_2, trade_side
                     )
                     if self.config.trade_profitability_condition_to_enter:
-                        if current_profitability < 0:
+                        if current_profitability < 0:  # 0.0005 = 0.05%
                             self.logger().info(f"Best Combination: {connector_1} | {connector_2} | {trade_side}"
                                                f"Funding rate profitability: {expected_profitability}"
                                                f"Trading profitability after fees: {current_profitability}"
@@ -269,13 +271,14 @@ class FundingRateArbitrage(StrategyV2Base):
                 funding_rate_diff = self.get_normalized_funding_rate_in_seconds(funding_info_report, funding_arbitrage_info["connector_1"]) - self.get_normalized_funding_rate_in_seconds(funding_info_report, funding_arbitrage_info["connector_2"])
             current_funding_condition = funding_rate_diff * self.funding_profitability_interval < self.config.funding_rate_diff_stop_loss
             if take_profit_condition:
-                self.logger().info("Take profit profitability reached, stopping executors")
+                self.logger().info("Take profit profitability reached, stopping executors (sike not really)")
                 self.stopped_funding_arbitrages[token].append(funding_arbitrage_info)
-                stop_executor_actions.extend([StopExecutorAction(executor_id=executor.id) for executor in executors])
+                # stop_executor_actions.extend([StopExecutorAction(executor_id=executor.id) for executor in executors])
             elif current_funding_condition:
-                self.logger().info("Funding rate difference reached for stop loss, stopping executors")
+                self.logger().info(
+                    "Funding rate difference reached for stop loss, stopping executors (sike not really)")
                 self.stopped_funding_arbitrages[token].append(funding_arbitrage_info)
-                stop_executor_actions.extend([StopExecutorAction(executor_id=executor.id) for executor in executors])
+                # stop_executor_actions.extend([StopExecutorAction(executor_id=executor.id) for executor in executors])
         return stop_executor_actions
 
     def did_complete_funding_payment(self, funding_payment_completed_event: FundingPaymentCompletedEvent):
@@ -293,6 +296,7 @@ class FundingRateArbitrage(StrategyV2Base):
             trading_pair=self.get_trading_pair_for_connector(token, connector_1),
             price_type=PriceType.MidPrice
         )
+        # This is the quantity to buy/sell, not dollar amount
         position_amount = self.config.position_size_quote / price
 
         position_executor_config_1 = PositionExecutorConfig(

@@ -55,9 +55,7 @@ ENV BUILD_DATE=${DATE}
 ENV INSTALLATION_TYPE=docker
 
 # Install system dependencies
-RUN apt-get update && \
-    apt-get install -y sudo libusb-1.0 && \
-    rm -rf /var/lib/apt/lists/*
+RUN rm -rf /var/lib/apt/lists/* && apt-get clean && apt-get update && apt-get install -y sudo libusb-1.0 && rm -rf /var/lib/apt/lists/*
 
 # Create mount points
 RUN mkdir -p /home/hummingbot/conf /home/hummingbot/conf/connectors /home/hummingbot/conf/strategies /home/hummingbot/conf/controllers /home/hummingbot/conf/scripts /home/hummingbot/logs /home/hummingbot/data /home/hummingbot/certs /home/hummingbot/scripts /home/hummingbot/controllers

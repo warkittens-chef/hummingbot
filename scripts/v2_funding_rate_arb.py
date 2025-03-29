@@ -1,6 +1,6 @@
 import os
 from decimal import Decimal
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Any
 
 import pandas as pd
 from pydantic import Field, validator
@@ -10,6 +10,8 @@ from hummingbot.client.ui.interface_utils import format_df_for_printout
 from hummingbot.connector.connector_base import ConnectorBase
 from hummingbot.core.clock import Clock
 from hummingbot.core.data_type.common import OrderType, PositionAction, PositionMode, PriceType, TradeType
+from hummingbot.core.data_type.funding_info import FundingInfo
+from hummingbot.core.data_type.order_candidate import PerpetualOrderCandidate
 from hummingbot.core.event.events import FundingPaymentCompletedEvent
 from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
@@ -103,6 +105,10 @@ class FundingRateArbitrage(StrategyV2Base):
 
     @classmethod
     def init_markets(cls, config: FundingRateArbitrageConfig):
+        """
+        Creates a dict for basic market info mapping the exchange name to the trading pair names. This is used by
+        start_command.py to establish connectors prior to initializing this class
+        """
         markets = {}
         for connector in config.connectors:
             trading_pairs = {cls.get_trading_pair_for_connector(token, connector) for token in config.tokens}
@@ -110,6 +116,10 @@ class FundingRateArbitrage(StrategyV2Base):
         cls.markets = markets
 
     def __init__(self, connectors: Dict[str, ConnectorBase], config: FundingRateArbitrageConfig):
+        """
+        Every strategy upon initialization is given a map of online connectors and a filled out config map based on
+        the chosen conf file in the user-defined CLI start statement.
+        """
         super().__init__(connectors, config)
         self.config = config
         self.active_funding_arbitrages = {}
@@ -132,12 +142,13 @@ class FundingRateArbitrage(StrategyV2Base):
                 for trading_pair in self.market_data_provider.get_trading_pairs(connector_name):
                     connector.set_leverage(trading_pair, self.config.leverage)
 
-    def get_funding_info_by_token(self, token):
+    def get_funding_info_by_token(self, token) -> dict[str, FundingInfo]:
         """
         This method provides the funding rates across all the connectors
         """
         funding_rates = {}
         for connector_name, connector in self.connectors.items():
+            self.logger().info(connector_name)
             trading_pair = self.get_trading_pair_for_connector(token, connector_name)
             funding_rates[connector_name] = connector.get_funding_info(trading_pair)
         return funding_rates
@@ -189,7 +200,7 @@ class FundingRateArbitrage(StrategyV2Base):
             estimated_trade_pnl_pct = (connector_1_price - connector_2_price) / connector_2_price
         return estimated_trade_pnl_pct - estimated_fees_connector_1 - estimated_fees_connector_2
 
-    def get_most_profitable_combination(self, funding_info_report: Dict):
+    def get_most_profitable_combination(self, funding_info_report: Dict) -> tuple[str, str, TradeType, Any]:
         best_combination = None
         highest_profitability = 0
         for connector_1 in funding_info_report:
@@ -221,6 +232,7 @@ class FundingRateArbitrage(StrategyV2Base):
             if token not in self.active_funding_arbitrages:
                 funding_info_report = self.get_funding_info_by_token(token)
                 best_combination = self.get_most_profitable_combination(funding_info_report)
+                self.logger().info(best_combination)
                 connector_1, connector_2, trade_side, expected_profitability = best_combination
                 if expected_profitability >= self.config.min_funding_rate_profitability:
                     current_profitability = self.get_current_profitability_after_fees(
@@ -248,6 +260,50 @@ class FundingRateArbitrage(StrategyV2Base):
                     return [CreateExecutorAction(executor_config=position_executor_config_1),
                             CreateExecutorAction(executor_config=position_executor_config_2)]
         return create_actions
+
+    def check_if_both_sides_executable(self, executor_config_1, executor_config_2):
+        """
+        This method is meant to preliminarily check if user wallet balances on both exchanges are sufficient for the
+        proposed arbitrage open trade
+        """
+        open_order_price_type = PriceType.BestBid if executor_config_1.side == TradeType.BUY else PriceType.BestAsk
+        executor_1_entry_price = self.connectors[executor_config_1.connector_name].get_price_by_type(
+            executor_config_1.trading_pair, open_order_price_type)
+        executor_1_order = PerpetualOrderCandidate(
+            trading_pair=executor_config_1.trading_pair,
+            is_maker=executor_config_1.triple_barrier_config.open_order_type.is_limit_type(),
+            order_type=executor_config_1.triple_barrier_config.open_order_type,
+            order_side=executor_config_1.side,
+            amount=executor_config_1.amount,
+            price=executor_1_entry_price,
+            leverage=Decimal(executor_config_1.leverage),
+        )
+
+        open_order_price_type = PriceType.BestBid if executor_config_1.side == TradeType.BUY else PriceType.BestAsk
+        executor_2_entry_price = self.connectors[executor_config_2.connector_name].get_price_by_type(
+            executor_config_2.trading_pair, open_order_price_type)
+        executor_2_order = PerpetualOrderCandidate(
+            trading_pair=executor_config_2.trading_pair,
+            is_maker=executor_config_2.triple_barrier_config.open_order_type.is_limit_type(),
+            order_type=executor_config_2.triple_barrier_config.open_order_type,
+            order_side=executor_config_2.side,
+            amount=executor_config_2.amount,
+            price=executor_2_entry_price,
+            leverage=Decimal(executor_config_2.leverage),
+        )
+
+        order_1_available = True
+        order_2_available = True
+        adjusted_order_candidates = self.connectors[executor_config_1.connector_name].budget_checker.adjust_candidates([executor_1_order])
+        if adjusted_order_candidates[0].amount == Decimal("0"):
+            order_1_available = False
+            self.logger().error(f"Not enough budget to open position for {executor_config_1.connector_name}")
+        adjusted_order_candidates = self.connectors[executor_config_2.connector_name].budget_checker.adjust_candidates([executor_2_order])
+        if adjusted_order_candidates[0].amount == Decimal("0"):
+            order_2_available = False
+            self.logger().error(f"Not enough budget to open position for {executor_config_2.connector_name}")
+
+        return order_1_available and order_2_available
 
     def stop_actions_proposal(self) -> List[StopExecutorAction]:
         """

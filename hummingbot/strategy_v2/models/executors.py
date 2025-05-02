@@ -21,7 +21,7 @@ class CloseType(Enum):
 class TrackedOrder:
     def __init__(self, order_id: Optional[str] = None):
         self._order_id = order_id
-        self._order = None
+        self._order: InFlightOrder | None = None
 
     @property
     def order_id(self):

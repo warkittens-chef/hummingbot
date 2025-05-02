@@ -34,6 +34,14 @@ class ExecutorInfo(BaseModel):
     close_type: Optional[CloseType] = None
     controller_id: Optional[str] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    buy_market: Optional[str] = None
+    buy_pair: Optional[str] = None
+    sell_market: Optional[str] = None
+    sell_pair: Optional[str] = None
+    buy_executed_amount_base: Optional[Decimal] = None
+    buy_avg_executed_price: Optional[Decimal] = None
+    sell_executed_amount_base: Optional[Decimal] = None
+    sell_avg_executed_price: Optional[Decimal] = None
 
     @property
     def is_done(self):

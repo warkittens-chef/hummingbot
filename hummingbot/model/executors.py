@@ -33,6 +33,14 @@ class Executors(HummingbotBase):
     is_trading = Column(Boolean, nullable=False)
     custom_info = Column(JSON, nullable=False)
     controller_id = Column(Text, nullable=True)
+    buy_market = Column(Text, nullable=True)
+    buy_pair = Column(Text, nullable=True)
+    sell_market = Column(Text, nullable=True)
+    sell_pair = Column(Text, nullable=True)
+    buy_executed_amount_base = Column(Float, nullable=True)
+    buy_avg_executed_price = Column(Float, nullable=True)
+    sell_executed_amount_base = Column(Float, nullable=True)
+    sell_avg_executed_price = Column(Float, nullable=True)
 
     def to_executor_info(self) -> ExecutorInfo:
         """
@@ -40,7 +48,7 @@ class Executors(HummingbotBase):
         """
         close_type = CloseType(self.close_type) if self.close_type else None
         status = RunnableStatus(self.status)
-        return ExecutorInfo(
+        ei = ExecutorInfo(
             id=self.id,
             timestamp=self.timestamp,
             type=self.type,
@@ -57,3 +65,17 @@ class Executors(HummingbotBase):
             custom_info=self.custom_info,
             controller_id=self.controller_id,
         )
+        # Want to maintain consistent emptiness between executor either not being an arbitrage_executor
+        # or being an arbitrage_executor. If Null in database, then means not arbitrage_executor.
+        # If empty string or Decimal(-1), then is arbitrage_executor.
+        ei.buy_market = self.buy_market if (self.buy_market or self.buy_market == "") else None
+        ei.buy_pair = self.buy_pair if (self.buy_pair or self.buy_pair == "") else None
+        ei.sell_market = self.sell_market if (self.sell_market or self.sell_market == "") else None
+        ei.sell_pair = self.sell_pair if (self.sell_pair or self.sell_pair == "") else None
+        ei.buy_executed_amount_base = Decimal(self.buy_executed_amount_base) if self.buy_executed_amount_base else None
+        ei.buy_avg_executed_price = Decimal(self.buy_avg_executed_price) if self.buy_avg_executed_price else None
+        ei.sell_executed_amount_base = (
+            Decimal(self.sell_executed_amount_base) if self.sell_executed_amount_base else None
+        )
+        ei.sell_avg_executed_price = Decimal(self.sell_avg_executed_price) if self.sell_avg_executed_price else None
+        return ei

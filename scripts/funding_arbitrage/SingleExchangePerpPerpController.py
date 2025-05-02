@@ -5,10 +5,11 @@ from typing import List, Set, Dict
 from pydantic import Field
 
 from hummingbot.client.config.config_data_types import ClientFieldData
+from hummingbot.connector.markets_recorder import MarketsRecorder
 from hummingbot.strategy_v2.controllers import ControllerBase, ControllerConfigBase
 from hummingbot.strategy_v2.executors.arbitrage_executor.data_types import ArbitrageExecutorConfig
 from hummingbot.strategy_v2.executors.data_types import ConnectorPair
-from hummingbot.strategy_v2.models.executor_actions import ExecutorAction
+from hummingbot.strategy_v2.models.executor_actions import ExecutorAction, StoreExecutorAction
 from hummingbot.strategy_v2.models.executors_info import ExecutorInfo
 from scripts.funding_arbitrage.FundingTrade import FundingTrade
 from scripts.funding_arbitrage.fixed_market_specs import get_all_valid_trades_for_token
@@ -139,6 +140,10 @@ class SingleExchangePerpPerpController(ControllerBase):
         self.opening_trade: FundingTrade = None
         self.closing_trade: FundingTrade = None
         self.active_trades: List[FundingTrade] = []
+        self.closed_trades: List[FundingTrade] = []
+
+    def reload_controller_state_from_storage(self):
+        all_executors = MarketsRecorder.get_instance().get_executors_by_controller(controller_id=self.config.id)
 
     def update_processed_data(self):
         """Determine the current state of the controller based on most recent market data i.e. determine the info:
@@ -155,6 +160,8 @@ class SingleExchangePerpPerpController(ControllerBase):
         self.current_controller_position_amount = Decimal(100000)
 
     def determine_executor_actions(self) -> List[ExecutorAction]:
+        self.process_active_executors()
+
         if self.state == ControllerState.NO_ACTIVE_TRADES:
             """ Search for new trade provided controller has sufficient funds. """
 
@@ -247,6 +254,42 @@ class SingleExchangePerpPerpController(ControllerBase):
                 for SCALING_IN to better trade and SCALING_OUT of active trade. """
             pass
         return []
+
+    def process_active_executors(self) -> list[StoreExecutorAction]:
+        """
+        This should routinely update FundingTrades with finished executor data and move those executors to storage.
+        """
+        stray_executors = []
+        store_executor_actions = []
+        for executor_info in self.executors_info:
+            if executor_info.is_done:
+                store_executor_actions.append(
+                    StoreExecutorAction(executor_id=executor_info.id, controller_id=executor_info.controller_id)
+                )
+
+            if self.opening_trade.executor_belongs_to_trade(executor_info):
+                self.opening_trade.update_order_status(executor_info)
+                continue
+            elif self.closing_trade.executor_belongs_to_trade(executor_info):
+                self.closing_trade.update_order_status(executor_info)
+                continue
+
+            active_trade_found = None
+            for trade in self.active_trades:
+                if trade.executor_belongs_to_trade(executor_info):
+                    active_trade_found = trade
+                    break
+
+            if active_trade_found:
+                # This shouldn't happen because trades in active_trades are meant signify a static state
+                # TODO: Should add a logger here to catch this if a bug does exist allowing this to happen
+                active_trade_found.update_order_status(executor_info)
+            else:
+                # Stray executor found. Probably means a bug where not all FundingTrade objects were instantiated
+                # TODO: Add a logger here to catch this if a bug does exist allowing this to happen
+                stray_executors.append(executor_info)
+
+        return store_executor_actions
 
     def accepting_new_trade_proposals(self) -> bool:
         """Determine if available funds, total active trade amount, and max number of active trades

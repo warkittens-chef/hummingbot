@@ -13,6 +13,7 @@ from hummingbot.strategy_v2.executors.arbitrage_executor.data_types import Arbit
 from hummingbot.strategy_v2.executors.executor_base import ExecutorBase
 from hummingbot.strategy_v2.models.base import RunnableStatus
 from hummingbot.strategy_v2.models.executors import CloseType, TrackedOrder
+from hummingbot.strategy_v2.models.executors_info import ExecutorInfo
 
 
 class ArbitrageExecutor(ExecutorBase):
@@ -151,6 +152,34 @@ class ArbitrageExecutor(ExecutorBase):
     @sell_order.setter
     def sell_order(self, value: TrackedOrder):
         self._sell_order = value
+
+    @property
+    def buy_executed_amount_base(self) -> Decimal:
+        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
+            return self.buy_order.order.executed_amount_base
+        else:
+            return Decimal("0")
+
+    @property
+    def buy_average_executed_price(self) -> Decimal:
+        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
+            return self.buy_order.order.average_executed_price
+        else:
+            return Decimal("0")
+
+    @property
+    def sell_executed_amount_base(self) -> Decimal:
+        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
+            return self.sell_order.order.executed_amount_base
+        else:
+            return Decimal("0")
+
+    @property
+    def sell_average_executed_price(self) -> Decimal:
+        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
+            return self.sell_order.order.average_executed_price
+        else:
+            return Decimal("0")
 
     async def get_resulting_price_for_amount(self, exchange: str, trading_pair: str, is_buy: bool,
                                              order_amount: Decimal):
@@ -332,6 +361,75 @@ class ArbitrageExecutor(ExecutorBase):
             "profit_pct": self._current_profitability,
             "failures": self._cumulative_failures,
         }
+
+    @property
+    def executor_info(self) -> ExecutorInfo:
+        """
+        Returns the executor info.
+        """
+        ei: ExecutorInfo = ExecutorInfo(
+            id=self.config.id,
+            timestamp=self.config.timestamp,
+            type=self.config.type,
+            status=self.status,
+            close_type=self.close_type,
+            close_timestamp=self.close_timestamp,
+            config=self.config,
+            net_pnl_pct=self.net_pnl_pct,
+            net_pnl_quote=self.net_pnl_quote,
+            cum_fees_quote=self.cum_fees_quote,
+            filled_amount_quote=self.filled_amount_quote,
+            is_active=self.is_active,
+            is_trading=self.is_trading,
+            custom_info=self.get_custom_info(),
+            controller_id=self.config.controller_id,
+            buy_market=self.buying_market.connector_name,
+            buy_pair=self.buying_market.trading_pair,
+            sell_market=self.selling_market.connector_name,
+            sell_pair=self.selling_market.trading_pair,
+        )
+
+        ei.filled_amount_quote = ei.filled_amount_quote if not ei.filled_amount_quote.is_nan() else Decimal("0")
+        ei.net_pnl_quote = ei.net_pnl_quote if not ei.net_pnl_quote.is_nan() else Decimal("0")
+        ei.cum_fees_quote = ei.cum_fees_quote if not ei.cum_fees_quote.is_nan() else Decimal("0")
+        ei.net_pnl_pct = ei.net_pnl_pct if not ei.net_pnl_pct.is_nan() else Decimal("0")
+
+        if self.buy_order.is_filled:
+            ei.buy_executed_amount_base = self.buy_order.executed_amount_base
+            ei.buy_avg_executed_price = self.buy_order.average_executed_price
+        else:
+            ei.buy_executed_amount_base = Decimal(-1)
+            ei.buy_avg_executed_price = Decimal(-1)
+
+        if self.sell_order.is_filled:
+            ei.sell_executed_amount_base = self.sell_order.executed_amount_base
+            ei.sell_avg_executed_price = self.sell_order.average_executed_price
+        else:
+            ei.sell_executed_amount_base = Decimal(-1)
+            ei.sell_avg_executed_price = Decimal(-1)
+
+        # Probably unnecessary to check for NaN
+        ei.buy_executed_amount_base = (
+            ei.buy_executed_amount_base
+            if (isinstance(ei.buy_executed_amount_base, Decimal) and not ei.buy_executed_amount_base.is_nan())
+            else Decimal(-1)
+        )
+        ei.buy_avg_executed_price = (
+            ei.buy_avg_executed_price
+            if (isinstance(ei.buy_avg_executed_price, Decimal) and not ei.buy_avg_executed_price.is_nan())
+            else Decimal(-1)
+        )
+        ei.sell_executed_amount_base = (
+            ei.sell_executed_amount_base
+            if (isinstance(ei.sell_executed_amount_base, Decimal) and not ei.sell_executed_amount_base.is_nan())
+            else Decimal(-1)
+        )
+        ei.sell_avg_executed_price = (
+            ei.sell_avg_executed_price
+            if (isinstance(ei.sell_avg_executed_price, Decimal) and not ei.sell_avg_executed_price.is_nan())
+            else Decimal(-1)
+        )
+        return ei
 
     def to_format_status(self):
         lines = []

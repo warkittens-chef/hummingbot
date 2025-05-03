@@ -188,7 +188,7 @@ class TestArbitrageExecutor(IsolatedAsyncioWrapperTestCase, LoggerMixinForTest):
         self.assertEqual(self.executor.executor_info.sell_market, "hyperliquid_perpetual")
         self.assertEqual(self.executor.executor_info.sell_pair, "BTC-USD")
 
-    def test_executor_info_has_no_executed_order_data_on_order_failure(self):
+    def test_executor_info_has_no_executed_order_data_on_fail(self):
         """
         Tests that any unfilled order relating to an arbitrage executor has its execution data
         marked as -1
@@ -234,7 +234,7 @@ class TestArbitrageExecutor(IsolatedAsyncioWrapperTestCase, LoggerMixinForTest):
         self.assertEqual(self.executor.executor_info.buy_avg_executed_price, Decimal(-1))
         self.assertEqual(self.executor.executor_info.sell_avg_executed_price, Decimal(-1))
 
-    def test_executor_info_has_executed_order_data(self):
+    def test_executor_info_has_executed_order_data_on_complete(self):
         """
         Tests that any filled order relating to an arbitrage executor has its execution data
         added to executor info
@@ -280,5 +280,54 @@ class TestArbitrageExecutor(IsolatedAsyncioWrapperTestCase, LoggerMixinForTest):
         self.assertEqual(self.executor.executor_info.sell_executed_amount_base, Decimal("5"))
         self.assertEqual(self.executor.executor_info.buy_avg_executed_price, Decimal("100"))
         self.assertEqual(self.executor.executor_info.sell_avg_executed_price, Decimal("101"))
+
+    def test_executor_info_has_some_executed_order_data_on_one_side_fail(self):
+        """
+        Tests that any filled order relating to an arbitrage executor has its execution data
+        added to executor info
+        """
+        market = MagicMock()
+        market_info = MagicMock()
+        market_info.market = market
+        strategy = MagicMock(spec=ScriptStrategyBase)
+        type(strategy).market_info = PropertyMock(return_value=market_info)
+        type(strategy).trading_pair = PropertyMock(return_value="BTC-USDT")
+        strategy.connectors = {
+            "binance_perpetual": MagicMock(),
+            "hyperliquid_perpetual": MagicMock(),
+        }
+
+        config = ArbitrageExecutorConfig(
+            id="123",
+            timestamp=1234,
+            controller_id="test",
+            buying_market=ConnectorPair(connector_name="binance_perpetual", trading_pair="BTC-USDT"),
+            selling_market=ConnectorPair(connector_name="hyperliquid_perpetual", trading_pair="BTC-USD"),
+            order_amount=Decimal("1"),
+            min_profitability=Decimal("0.1"),
+        )
+        self.executor = ArbitrageExecutor(strategy=strategy, config=config)
+        self.executor.buy_order = Mock(spec=TrackedOrder)
+        self.executor.sell_order = Mock(spec=TrackedOrder)
+        self.executor.buy_order.is_filled = True
+        self.executor.sell_order.is_filled = False
+        self.executor.buy_order.executed_amount_base = Decimal("5")
+        self.executor.sell_order.executed_amount_base = Decimal("0")
+        self.executor.buy_order.average_executed_price = Decimal("100")
+        self.executor.sell_order.average_executed_price = Decimal("0")
+        self.executor._status = RunnableStatus.TERMINATED
+        self.executor.close_type = CloseType.ONE_SIDE_FAILED
+        self.executor.buy_order.cum_fees_quote = Decimal("1")
+        self.executor.sell_order.cum_fees_quote = Decimal("0")
+
+        self.executor.buy_order.order.executed_amount_base = Decimal("5")
+        self.executor.sell_order.order.executed_amount_base = Decimal("0")
+
+        self.assertEqual(self.executor.executor_info.close_type, CloseType.ONE_SIDE_FAILED)
+        self.assertEqual(self.executor.executor_info.buy_executed_amount_base, Decimal("5"))
+        self.assertEqual(self.executor.executor_info.sell_executed_amount_base, Decimal(-1))
+        self.assertEqual(self.executor.executor_info.buy_avg_executed_price, Decimal("100"))
+        self.assertEqual(self.executor.executor_info.sell_avg_executed_price, Decimal(-1))
+
 
 

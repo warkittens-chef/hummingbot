@@ -213,7 +213,10 @@ class ArbitrageExecutor(ExecutorBase):
                 self.logger().error(f"Error calculating profitability: {e}")
         elif self.status == RunnableStatus.SHUTTING_DOWN:
             if self._cumulative_failures > self.max_retries:
-                self.close_type = CloseType.FAILED
+                if (self.buy_order.order and self.buy_order.order.is_filled) or (self.sell_order.order and self.sell_order.order.is_filled):
+                    self.close_type = CloseType.ONE_SIDE_FAILED
+                else:
+                    self.close_type = CloseType.FAILED
                 self.stop()
             else:
                 self.check_order_status()

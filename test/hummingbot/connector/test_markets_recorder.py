@@ -1,18 +1,18 @@
 import asyncio
 import time
 from decimal import Decimal
-from typing import Awaitable
+from typing import Awaitable, List
 from unittest import TestCase
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch, Mock
 
 import numpy as np
+from hummingbot.core.data_type.order_book import OrderBook
 from sqlalchemy import create_engine
 
 from hummingbot.client.config.client_config_map import ClientConfigMap, MarketDataCollectionConfigMap
 from hummingbot.client.config.config_helpers import ClientConfigAdapter
 from hummingbot.connector.markets_recorder import MarketsRecorder
 from hummingbot.core.data_type.common import OrderType, PositionAction, PriceType, TradeType
-from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.data_type.trade_fee import AddedToCostTradeFee
 from hummingbot.core.event.events import (
     BuyOrderCompletedEvent,
@@ -29,10 +29,13 @@ from hummingbot.model.position import Position
 from hummingbot.model.sql_connection_manager import SQLConnectionManager, SQLConnectionType
 from hummingbot.model.trade_fill import TradeFill
 from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
+from hummingbot.strategy_v2.executors.arbitrage_executor.arbitrage_executor import ArbitrageExecutor
+from hummingbot.strategy_v2.executors.arbitrage_executor.data_types import ArbitrageExecutorConfig
+from hummingbot.strategy_v2.executors.data_types import ConnectorPair
 from hummingbot.strategy_v2.executors.position_executor.data_types import PositionExecutorConfig, TripleBarrierConfig
 from hummingbot.strategy_v2.executors.position_executor.position_executor import PositionExecutor
 from hummingbot.strategy_v2.models.base import RunnableStatus
-from hummingbot.strategy_v2.models.executors import CloseType
+from hummingbot.strategy_v2.models.executors import CloseType, TrackedOrder
 from hummingbot.strategy_v2.models.executors_info import ExecutorInfo
 
 
@@ -141,7 +144,8 @@ class MarketsRecorderTests(TestCase):
                     leverage=1,
                     trade_fee=AddedToCostTradeFee().to_json(),
                     exchange_trade_id="EOID1",
-                    position=PositionAction.NIL.value)
+                    position=PositionAction.NIL.value,
+                )
                 session.add(trade_fill_record)
 
             fill_id = trade_fill_record.exchange_trade_id
@@ -267,7 +271,7 @@ class MarketsRecorderTests(TestCase):
             price=Decimal(1010),
             amount=create_event.amount,
             trade_fee=AddedToCostTradeFee(),
-            exchange_trade_id="TradeId1"
+            exchange_trade_id="TradeId1",
         )
 
         recorder._did_fill_order(MarketEvent.OrderFilled.value, self, fill_event)
@@ -327,7 +331,7 @@ class MarketsRecorderTests(TestCase):
             price=Decimal(1010),
             amount=create_event.amount,
             trade_fee=trade_fee,
-            exchange_trade_id="TradeId1"
+            exchange_trade_id="TradeId1",
         )
 
         recorder._did_fill_order(MarketEvent.OrderFilled.value, self, fill_event)
@@ -382,7 +386,8 @@ class MarketsRecorderTests(TestCase):
             quote_asset=self.quote,
             base_asset_amount=create_event.amount,
             quote_asset_amount=create_event.amount * create_event.price,
-            order_type=create_event.type)
+            order_type=create_event.type,
+        )
 
         recorder._did_complete_order(MarketEvent.BuyOrderCompleted.value, self, complete_event)
 
@@ -455,10 +460,19 @@ class MarketsRecorderTests(TestCase):
             ),
         )
 
-        position = Position(id="123", timestamp=123, controller_id="test_controller", connector_name="binance",
-                            trading_pair="ETH-USDT", side=TradeType.BUY.name, amount=Decimal("1"), breakeven_price=Decimal("1000"),
-                            unrealized_pnl_quote=Decimal("0"), cum_fees_quote=Decimal("0"),
-                            volume_traded_quote=Decimal("10"))
+        position = Position(
+            id="123",
+            timestamp=123,
+            controller_id="test_controller",
+            connector_name="binance",
+            trading_pair="ETH-USDT",
+            side=TradeType.BUY.name,
+            amount=Decimal("1"),
+            breakeven_price=Decimal("1000"),
+            unrealized_pnl_quote=Decimal("0"),
+            cum_fees_quote=Decimal("0"),
+            volume_traded_quote=Decimal("10"),
+        )
         recorder.store_position(position)
         with self.manager.get_new_session() as session:
             query = session.query(Position)
@@ -479,19 +493,189 @@ class MarketsRecorderTests(TestCase):
         )
         position_executor_mock = MagicMock(spec=PositionExecutor)
         position_executor_config = PositionExecutorConfig(
-            id="123", timestamp=1234, trading_pair="ETH-USDT", connector_name="binance", side=TradeType.BUY,
-            entry_price=Decimal("1000"), amount=Decimal("1"), leverage=1,
+            id="123",
+            timestamp=1234,
+            trading_pair="ETH-USDT",
+            connector_name="binance",
+            side=TradeType.BUY,
+            entry_price=Decimal("1000"),
+            amount=Decimal("1"),
+            leverage=1,
             triple_barrier_config=TripleBarrierConfig(take_profit=Decimal("0.1"), stop_loss=Decimal("0.2")),
         )
         position_executor_mock.config = position_executor_config
         position_executor_mock.executor_info = ExecutorInfo(
-            id="123", timestamp=1234, type="position_executor", close_timestamp=1235, close_type=CloseType.TAKE_PROFIT,
-            status=RunnableStatus.TERMINATED, controller_id="test_controller", custom_info={},
-            config=position_executor_config, net_pnl_pct=Decimal("0.1"), net_pnl_quote=Decimal("10"),
-            cum_fees_quote=Decimal("0.1"), filled_amount_quote=Decimal("1"), is_active=False, is_trading=False)
+            id="123",
+            timestamp=1234,
+            type="position_executor",
+            close_timestamp=1235,
+            close_type=CloseType.TAKE_PROFIT,
+            status=RunnableStatus.TERMINATED,
+            controller_id="test_controller",
+            custom_info={},
+            config=position_executor_config,
+            net_pnl_pct=Decimal("0.1"),
+            net_pnl_quote=Decimal("10"),
+            cum_fees_quote=Decimal("0.1"),
+            filled_amount_quote=Decimal("1"),
+            is_active=False,
+            is_trading=False,
+        )
 
         recorder.store_or_update_executor(position_executor_mock)
         with self.manager.get_new_session() as session:
             query = session.query(Executors)
             executors = query.all()
         self.assertEqual(1, len(executors))
+
+    def test_store_completed_arbitrage_executor_in_database(self):
+        """
+        Tests that the completed arbitrage executor is stored in the database correctly.
+        """
+        # Setup
+        market = MagicMock()
+        market_info = MagicMock()
+        market_info.market = market
+        strategy = MagicMock(spec=ScriptStrategyBase)
+        type(strategy).market_info = PropertyMock(return_value=market_info)
+        type(strategy).trading_pair = PropertyMock(return_value="BTC-USDT")
+        strategy.connectors = {
+            "binance_perpetual": MagicMock(),
+            "hyperliquid_perpetual": MagicMock(),
+        }
+
+        recorder = MarketsRecorder(
+            sql=self.manager,
+            markets=[self],
+            config_file_path=self.config_file_path,
+            strategy_name=self.strategy_name,
+            market_data_collection=MarketDataCollectionConfigMap(
+                market_data_collection_enabled=False,
+                market_data_collection_interval=60,
+                market_data_collection_depth=20,
+            ),
+        )
+
+        config = ArbitrageExecutorConfig(
+            id="123",
+            timestamp=1234,
+            controller_id="test",
+            buying_market=ConnectorPair(connector_name="binance_perpetual", trading_pair="BTC-USDT"),
+            selling_market=ConnectorPair(connector_name="hyperliquid_perpetual", trading_pair="BTC-USD"),
+            order_amount=Decimal("1"),
+            min_profitability=Decimal("0.1"),
+        )
+        completed_arbitrage_executor = ArbitrageExecutor(strategy=strategy, config=config)
+        completed_arbitrage_executor.buy_order = Mock(spec=TrackedOrder)
+        completed_arbitrage_executor.sell_order = Mock(spec=TrackedOrder)
+        completed_arbitrage_executor.buy_order.is_filled = True
+        completed_arbitrage_executor.sell_order.is_filled = True
+        completed_arbitrage_executor.buy_order.executed_amount_base = Decimal("5")
+        completed_arbitrage_executor.sell_order.executed_amount_base = Decimal("5")
+        completed_arbitrage_executor.buy_order.average_executed_price = Decimal("100")
+        completed_arbitrage_executor.sell_order.average_executed_price = Decimal("101")
+        completed_arbitrage_executor._status = RunnableStatus.TERMINATED
+        completed_arbitrage_executor.close_type = CloseType.COMPLETED
+        completed_arbitrage_executor.buy_order.cum_fees_quote = Decimal("1")
+        completed_arbitrage_executor.sell_order.cum_fees_quote = Decimal("1")
+
+        completed_arbitrage_executor.buy_order.order.executed_amount_base = Decimal("5")
+        completed_arbitrage_executor.sell_order.order.executed_amount_base = Decimal("5")
+
+        # Act
+        recorder.store_or_update_executor(completed_arbitrage_executor)
+
+        # Validate
+        with self.manager.get_new_session() as session:
+            query = session.query(Executors)
+            executors: List[Executors] = query.all()
+        self.assertEqual(1, len(executors))
+        self.assertEqual("123", executors[0].id)
+        self.assertEqual("test", executors[0].controller_id)
+        self.assertEqual("arbitrage_executor", executors[0].type)
+        self.assertEqual(9, executors[0].close_type)
+        self.assertEqual(4, executors[0].status)
+        self.assertEqual("binance_perpetual", executors[0].buy_market)
+        self.assertEqual("hyperliquid_perpetual", executors[0].sell_market)
+        self.assertEqual("BTC-USDT", executors[0].buy_pair)
+        self.assertEqual("BTC-USD", executors[0].sell_pair)
+        self.assertEqual(Decimal("5"), executors[0].buy_executed_amount_base)
+        self.assertEqual(Decimal("5"), executors[0].sell_executed_amount_base)
+        self.assertEqual(Decimal("100"), executors[0].buy_avg_executed_price)
+        self.assertEqual(Decimal("101"), executors[0].sell_avg_executed_price)
+
+    def test_store_failed_arbitrage_executor_in_database(self):
+        """
+        Tests that the failed arbitrage executor is stored in the database correctly.
+        """
+        # Setup
+        market = MagicMock()
+        market_info = MagicMock()
+        market_info.market = market
+        strategy = MagicMock(spec=ScriptStrategyBase)
+        type(strategy).market_info = PropertyMock(return_value=market_info)
+        type(strategy).trading_pair = PropertyMock(return_value="BTC-USDT")
+        strategy.connectors = {
+            "binance_perpetual": MagicMock(),
+            "hyperliquid_perpetual": MagicMock(),
+        }
+
+        recorder = MarketsRecorder(
+            sql=self.manager,
+            markets=[self],
+            config_file_path=self.config_file_path,
+            strategy_name=self.strategy_name,
+            market_data_collection=MarketDataCollectionConfigMap(
+                market_data_collection_enabled=False,
+                market_data_collection_interval=60,
+                market_data_collection_depth=20,
+            ),
+        )
+
+        config = ArbitrageExecutorConfig(
+            id="123",
+            timestamp=1234,
+            controller_id="test",
+            buying_market=ConnectorPair(connector_name="binance_perpetual", trading_pair="BTC-USDT"),
+            selling_market=ConnectorPair(connector_name="hyperliquid_perpetual", trading_pair="BTC-USD"),
+            order_amount=Decimal("1"),
+            min_profitability=Decimal("0.1"),
+        )
+        completed_arbitrage_executor = ArbitrageExecutor(strategy=strategy, config=config)
+        completed_arbitrage_executor.buy_order = Mock(spec=TrackedOrder)
+        completed_arbitrage_executor.sell_order = Mock(spec=TrackedOrder)
+        completed_arbitrage_executor.buy_order.is_filled = False
+        completed_arbitrage_executor.sell_order.is_filled = False
+        completed_arbitrage_executor.buy_order.executed_amount_base = Decimal("0")
+        completed_arbitrage_executor.sell_order.executed_amount_base = Decimal("0")
+        completed_arbitrage_executor.buy_order.average_executed_price = Decimal("0")
+        completed_arbitrage_executor.sell_order.average_executed_price = Decimal("0")
+        completed_arbitrage_executor._status = RunnableStatus.TERMINATED
+        completed_arbitrage_executor.close_type = CloseType.FAILED
+        completed_arbitrage_executor.buy_order.cum_fees_quote = Decimal("0")
+        completed_arbitrage_executor.sell_order.cum_fees_quote = Decimal("0")
+
+        completed_arbitrage_executor.buy_order.order.executed_amount_base = Decimal("0")
+        completed_arbitrage_executor.sell_order.order.executed_amount_base = Decimal("0")
+
+        # Act
+        recorder.store_or_update_executor(completed_arbitrage_executor)
+
+        # Validate
+        with self.manager.get_new_session() as session:
+            query = session.query(Executors)
+            executors: List[Executors] = query.all()
+        self.assertEqual(1, len(executors))
+        self.assertEqual("123", executors[0].id)
+        self.assertEqual("test", executors[0].controller_id)
+        self.assertEqual("arbitrage_executor", executors[0].type)
+        self.assertEqual(8, executors[0].close_type)
+        self.assertEqual(4, executors[0].status)
+        self.assertEqual("binance_perpetual", executors[0].buy_market)
+        self.assertEqual("hyperliquid_perpetual", executors[0].sell_market)
+        self.assertEqual("BTC-USDT", executors[0].buy_pair)
+        self.assertEqual("BTC-USD", executors[0].sell_pair)
+        self.assertEqual(Decimal(-1), executors[0].buy_executed_amount_base)
+        self.assertEqual(Decimal(-1), executors[0].sell_executed_amount_base)
+        self.assertEqual(Decimal(-1), executors[0].buy_avg_executed_price)
+        self.assertEqual(Decimal(-1), executors[0].sell_avg_executed_price)

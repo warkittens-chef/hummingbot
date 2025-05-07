@@ -168,29 +168,29 @@ class ArbitrageExecutor(ExecutorBase):
 
     @property
     def buy_executed_amount_base(self) -> Decimal:
-        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
-            return self.buy_order.order.executed_amount_base
+        if self.close_type in [CloseType.COMPLETED, CloseType.ONE_SIDE_FAILED]:
+            return self.buy_order.executed_amount_base
         else:
             return Decimal("0")
 
     @property
     def buy_average_executed_price(self) -> Decimal:
-        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
-            return self.buy_order.order.average_executed_price
+        if self.close_type in [CloseType.COMPLETED, CloseType.ONE_SIDE_FAILED]:
+            return self.buy_order.average_executed_price
         else:
             return Decimal("0")
 
     @property
     def sell_executed_amount_base(self) -> Decimal:
-        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
-            return self.sell_order.order.executed_amount_base
+        if self.close_type in [CloseType.COMPLETED, CloseType.ONE_SIDE_FAILED]:
+            return self.sell_order.executed_amount_base
         else:
             return Decimal("0")
 
     @property
     def sell_average_executed_price(self) -> Decimal:
-        if self.arbitrage_status == ArbitrageExecutorStatus.COMPLETED:
-            return self.sell_order.order.average_executed_price
+        if self.close_type in [CloseType.COMPLETED, CloseType.ONE_SIDE_FAILED]:
+            return self.sell_order.average_executed_price
         else:
             return Decimal("0")
 
@@ -429,15 +429,15 @@ class ArbitrageExecutor(ExecutorBase):
             ei.buy_executed_amount_base = self.buy_order.executed_amount_base
             ei.buy_avg_executed_price = self.buy_order.average_executed_price
         else:
-            ei.buy_executed_amount_base = Decimal(-1)
-            ei.buy_avg_executed_price = Decimal(-1)
+            ei.buy_executed_amount_base = Decimal(0)
+            ei.buy_avg_executed_price = Decimal(0)
 
         if self.sell_order.is_filled:
             ei.sell_executed_amount_base = self.sell_order.executed_amount_base
             ei.sell_avg_executed_price = self.sell_order.average_executed_price
         else:
-            ei.sell_executed_amount_base = Decimal(-1)
-            ei.sell_avg_executed_price = Decimal(-1)
+            ei.sell_executed_amount_base = Decimal(0)
+            ei.sell_avg_executed_price = Decimal(0)
 
         return ei
 

@@ -1,8 +1,14 @@
 from typing import Any
 from unittest import TestCase
 
+from hummingbot.funding_arbitrage.fixed_market_specs import (
+    get_valid_connector_pairs,
+    get_all_valid_trades_for_token,
+    get_market_pair_info,
+    VolatilityRating,
+    PVPriceType,
+)
 from hummingbot.strategy_v2.executors.data_types import ConnectorPair
-from scripts.funding_arbitrage.fixed_market_specs import get_valid_connector_pairs, get_all_valid_trades_for_token
 
 
 class TestFixedMarketSpecs(TestCase):
@@ -211,3 +217,29 @@ class TestFixedMarketSpecs(TestCase):
         self.assertEqual(len(result), len(expected_pairs))
         for pair in expected_pairs:
             self.assertIn(pair, result)
+
+    def test_get_market_pair_info_returns_correct_info(self):
+        # Arrange
+        market = "bybit_perpetual"
+        base = "ENA"
+        quote = "USDT"
+
+        # Act
+        result = get_market_pair_info(market, base, quote)
+
+        # Assert
+        self.assertFalse(result is None)
+        # self.assertEqual(result.interval, 60 * 60 * 4) interval might change in future so don't rely on it
+        self.assertEqual(result.volatility, VolatilityRating.LOW)
+        self.assertEqual(result.price_type, PVPriceType.AVG_ENTRY)
+
+    def test_returns_none_when_market_not_in_exchange_map(self):
+        # Arrange
+        market = "non_existent_market"
+        base = "ENA"
+        quote = "USDT"
+
+        # Act
+        result = get_market_pair_info(market, base, quote)
+
+        self.assertEqual(None, result)

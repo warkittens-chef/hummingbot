@@ -1,21 +1,23 @@
 #!/usr/bin/env python
-import pandas as pd
+from datetime import datetime
 from typing import (
     List,
     Optional,
 )
+
+import pandas as pd
 from sqlalchemy import (
     Column,
     Text,
     Index,
     BigInteger,
-    Float,
+    Float, Integer,
 )
 from sqlalchemy.orm import (
     Session
 )
-from datetime import datetime
 
+from hummingbot.funding_arbitrage.fixed_market_specs import PVPriceType
 from . import HummingbotBase
 
 
@@ -33,6 +35,11 @@ class FundingPayment(HummingbotBase):
     rate = Column(Float, nullable=False)
     symbol = Column(Text, nullable=False)
     amount = Column(Float, nullable=False)
+    price_type = Column(Integer, nullable=False, default=PVPriceType.UNKNOWN)
+    trade_id = Column(Text, nullable=True)
+    trade_position_value = Column(Float, nullable=True)
+    trade_position_exposure = Column(Float, nullable=True)
+
 
     def __repr__(self) -> str:
         return f"FundingPayment(timestamp={self.timestamp}, config_file_path='{self.config_file_path}', " \

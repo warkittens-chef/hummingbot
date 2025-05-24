@@ -12,39 +12,63 @@ Future Functionality:
     - Get funding interval info directly from exchange, possibly via API call
     - Determine volatility rating by getting market data such as OI/daily volume and analyzing it instead of using
       fixed rating
-
-
 """
-
+import inspect
 from enum import Enum
 from itertools import permutations
+from typing import Optional
 
 from hummingbot.strategy_v2.executors.data_types import ConnectorPair
 
 
 class VolatilityRating(Enum):
-    LOW = 0  # No pair-specific risk management needed
-    MEDIUM = 1
-    HIGH = 2
-    DNU = 3  # Used as override to prevent any controller from using pair
+    DNU = -1  # Used as override to prevent any controller from using pair
+    LOW = 1  # No pair-specific risk management needed
+    MEDIUM = 2
+    HIGH = 3
+
+class PVPriceType(Enum):
+    UNKNOWN = "unknown"
+    AVG_ENTRY = "avg_entry"
+    MARK = "mark"
+    SETTLEMENT = "settlement"
+
+
+class MarketPairInfo:
+    def __init__(self, interval: int = -1, volatility: VolatilityRating = VolatilityRating.DNU, price_type: PVPriceType = PVPriceType.UNKNOWN):
+        self.interval = interval
+        self.volatility = volatility
+        self.price_type = price_type
 
 
 exchange_map = {
     "bybit_perpetual": {
         "ENA": {
-            "USDT": {"interval": 60 * 60 * 4, "volatility": VolatilityRating.LOW},
-            "USDC": {"interval": 60 * 60 * 8, "volatility": VolatilityRating.LOW},
+            "USDT": MarketPairInfo(interval=60 * 60 * 4, volatility=VolatilityRating.LOW, price_type=PVPriceType.AVG_ENTRY),
+            "USDC": MarketPairInfo(interval=60 * 60 * 8, volatility=VolatilityRating.LOW, price_type=PVPriceType.SETTLEMENT),
         },
         "ONDO": {
-            "USDT": {"interval": 60 * 60 * 4, "volatility": VolatilityRating.LOW},
-            "USDC": {"interval": 60 * 60 * 8, "volatility": VolatilityRating.LOW},
+            "USDT": MarketPairInfo(interval=60 * 60 * 4, volatility=VolatilityRating.LOW, price_type=PVPriceType.AVG_ENTRY),
+            "USDC": MarketPairInfo(interval=60 * 60 * 8, volatility=VolatilityRating.LOW, price_type=PVPriceType.SETTLEMENT),
         },
     },
     "hyperliquid_perpetual": {
-        "ENA": {"USD": {"interval": 60 * 60 * 1, "volatility": VolatilityRating.LOW}},
-        "ONDO": {"USD": {"interval": 60 * 60 * 1, "volatility": VolatilityRating.LOW}},
+        "ENA": {
+            "USD": MarketPairInfo(interval=60 * 60 * 1, volatility=VolatilityRating.LOW, price_type=PVPriceType.MARK),
+        },
+        "ONDO": {
+            "USD": MarketPairInfo(interval=60 * 60 * 1, volatility=VolatilityRating.LOW, price_type=PVPriceType.MARK),
+        },
     },
 }
+
+def get_market_pair_info(market: str, base: str, quote: str) -> Optional[MarketPairInfo]:
+    print(inspect.currentframe())
+    if exchange_map.get(market):
+        if exchange_map[market].get(base):
+            if exchange_map[market][base].get(quote):
+                return exchange_map[market][base][quote]
+    return None
 
 
 # TODO: memoize this

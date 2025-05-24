@@ -72,10 +72,10 @@ class Executors(HummingbotBase):
         ei.buy_pair = self.buy_pair if (self.buy_pair or self.buy_pair == "") else None
         ei.sell_market = self.sell_market if (self.sell_market or self.sell_market == "") else None
         ei.sell_pair = self.sell_pair if (self.sell_pair or self.sell_pair == "") else None
-        ei.buy_executed_amount_base = Decimal(self.buy_executed_amount_base) if self.buy_executed_amount_base else None
-        ei.buy_avg_executed_price = Decimal(self.buy_avg_executed_price) if self.buy_avg_executed_price else None
+        ei.buy_executed_amount_base = Decimal(self.buy_executed_amount_base) if (self.buy_executed_amount_base or self.buy_executed_amount_base == 0) else None
+        ei.buy_avg_executed_price = Decimal(self.buy_avg_executed_price) if (self.buy_avg_executed_price or self.buy_executed_amount_base == 0) else None
         ei.sell_executed_amount_base = (
-            Decimal(self.sell_executed_amount_base) if self.sell_executed_amount_base else None
+            Decimal(self.sell_executed_amount_base) if (self.sell_executed_amount_base or self.buy_executed_amount_base == 0) else None
         )
-        ei.sell_avg_executed_price = Decimal(self.sell_avg_executed_price) if self.sell_avg_executed_price else None
+        ei.sell_avg_executed_price = Decimal(self.sell_avg_executed_price) if (self.sell_avg_executed_price or self.buy_executed_amount_base == 0) else None
         return ei

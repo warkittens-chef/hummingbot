@@ -20,9 +20,13 @@ from hummingbot.core.event.events import (
     MarketEvent,
     OrderFilledEvent,
     SellOrderCreatedEvent,
+    FundingPaymentCompletedEvent,
 )
+from hummingbot.funding_arbitrage.fixed_market_specs import PVPriceType
 from hummingbot.logger import HummingbotLogger
 from hummingbot.model.executors import Executors
+from hummingbot.model.funding_payment import FundingPayment
+from hummingbot.model.funding_trade import FundingTrade
 from hummingbot.model.market_data import MarketData
 from hummingbot.model.order import Order
 from hummingbot.model.position import Position
@@ -675,7 +679,312 @@ class MarketsRecorderTests(TestCase):
         self.assertEqual("hyperliquid_perpetual", executors[0].sell_market)
         self.assertEqual("BTC-USDT", executors[0].buy_pair)
         self.assertEqual("BTC-USD", executors[0].sell_pair)
-        self.assertEqual(Decimal(-1), executors[0].buy_executed_amount_base)
-        self.assertEqual(Decimal(-1), executors[0].sell_executed_amount_base)
-        self.assertEqual(Decimal(-1), executors[0].buy_avg_executed_price)
-        self.assertEqual(Decimal(-1), executors[0].sell_avg_executed_price)
+        self.assertEqual(Decimal("0"), executors[0].buy_executed_amount_base)
+        self.assertEqual(Decimal("0"), executors[0].sell_executed_amount_base)
+        self.assertEqual(Decimal("0"), executors[0].buy_avg_executed_price)
+        self.assertEqual(Decimal("0"), executors[0].sell_avg_executed_price)
+
+    def test_store_one_side_failed_arbitrage_executor_in_database(self):
+        """
+        Tests that the half failed arbitrage executor is stored in the database correctly.
+        """
+        # Setup
+        market = MagicMock()
+        market_info = MagicMock()
+        market_info.market = market
+        strategy = MagicMock(spec=ScriptStrategyBase)
+        type(strategy).market_info = PropertyMock(return_value=market_info)
+        type(strategy).trading_pair = PropertyMock(return_value="BTC-USDT")
+        strategy.connectors = {
+            "binance_perpetual": MagicMock(),
+            "hyperliquid_perpetual": MagicMock(),
+        }
+
+        recorder = MarketsRecorder(
+            sql=self.manager,
+            markets=[self],
+            config_file_path=self.config_file_path,
+            strategy_name=self.strategy_name,
+            market_data_collection=MarketDataCollectionConfigMap(
+                market_data_collection_enabled=False,
+                market_data_collection_interval=60,
+                market_data_collection_depth=20,
+            ),
+        )
+
+        config = ArbitrageExecutorConfig(
+            id="123",
+            timestamp=1234,
+            controller_id="test",
+            buying_market=ConnectorPair(connector_name="binance_perpetual", trading_pair="BTC-USDT"),
+            selling_market=ConnectorPair(connector_name="hyperliquid_perpetual", trading_pair="BTC-USD"),
+            order_amount=Decimal("1"),
+            min_profitability=Decimal("0.1"),
+        )
+        completed_arbitrage_executor = ArbitrageExecutor(strategy=strategy, config=config)
+        completed_arbitrage_executor.buy_order = Mock(spec=TrackedOrder)
+        completed_arbitrage_executor.sell_order = Mock(spec=TrackedOrder)
+        completed_arbitrage_executor.buy_order.is_filled = True
+        completed_arbitrage_executor.sell_order.is_filled = False
+        completed_arbitrage_executor.buy_order.executed_amount_base = Decimal(10)
+        completed_arbitrage_executor.sell_order.executed_amount_base = Decimal("0")
+        completed_arbitrage_executor.buy_order.average_executed_price = Decimal(45)
+        completed_arbitrage_executor.sell_order.average_executed_price = Decimal("0")
+        completed_arbitrage_executor._status = RunnableStatus.TERMINATED
+        completed_arbitrage_executor.close_type = CloseType.ONE_SIDE_FAILED
+        completed_arbitrage_executor.buy_order.cum_fees_quote = Decimal(1)
+        completed_arbitrage_executor.sell_order.cum_fees_quote = Decimal("0")
+
+        completed_arbitrage_executor.buy_order.order.executed_amount_base = Decimal(10)
+        completed_arbitrage_executor.sell_order.order.executed_amount_base = Decimal("0")
+
+        # Act
+        recorder.store_or_update_executor(completed_arbitrage_executor)
+
+        # Validate
+        with self.manager.get_new_session() as session:
+            query = session.query(Executors)
+            executors: List[Executors] = query.all()
+        self.assertEqual(1, len(executors))
+        self.assertEqual("123", executors[0].id)
+        self.assertEqual("test", executors[0].controller_id)
+        self.assertEqual("arbitrage_executor", executors[0].type)
+        self.assertEqual(11, executors[0].close_type)
+        self.assertEqual(4, executors[0].status)
+        self.assertEqual("binance_perpetual", executors[0].buy_market)
+        self.assertEqual("hyperliquid_perpetual", executors[0].sell_market)
+        self.assertEqual("BTC-USDT", executors[0].buy_pair)
+        self.assertEqual("BTC-USD", executors[0].sell_pair)
+        self.assertEqual(Decimal(10), executors[0].buy_executed_amount_base)
+        self.assertEqual(Decimal("0"), executors[0].sell_executed_amount_base)
+        self.assertEqual(Decimal(45), executors[0].buy_avg_executed_price)
+        self.assertEqual(Decimal("0"), executors[0].sell_avg_executed_price)
+
+    def test_records_funding_payment_with_associated_trade_details(self):
+        # Arrange
+        mock_market = MagicMock()
+        mock_market.display_name = "binance"
+
+        mock_event = MagicMock(spec=FundingPaymentCompletedEvent)
+        mock_event.timestamp = 2000
+        mock_event.trading_pair = "BTC-USDT"
+        mock_event.amount = Decimal("10.5")
+        mock_event.funding_rate = Decimal("0.001")
+
+        mock_funding_trade = FundingTrade(
+            id="trade123",
+            start_time=1000,
+            end_time=None,
+            long_market="binance",
+            long_pair="BTC-USDT",
+            short_market="binance",
+            short_pair="BTC-USDT",
+        )
+        with self.manager.get_new_session() as session:
+            session.add(mock_funding_trade)
+            session.commit()
+
+        mock_market_pair_info = MagicMock()
+        mock_market_pair_info.price_type = PVPriceType.AVG_ENTRY
+
+        mock_position_metrics = MagicMock()
+        mock_position_metrics.get_position_size.return_value = Decimal("1.5")
+        mock_position_metrics.get_position_avg_entry_price.return_value = Decimal("20000")
+
+        recorder = MarketsRecorder(
+            sql=self.manager,
+            markets=[self],
+            config_file_path=self.config_file_path,
+            strategy_name=self.strategy_name,
+            market_data_collection=MarketDataCollectionConfigMap(
+                market_data_collection_enabled=False,
+                market_data_collection_interval=60,
+                market_data_collection_depth=20,
+            ),
+        )
+        recorder._position_metrics = mock_position_metrics
+        recorder._ev_loop = MagicMock()
+
+        # Act
+        with patch("hummingbot.connector.markets_recorder.get_market_pair_info", return_value=mock_market_pair_info):
+            recorder._did_complete_funding_payment(1, mock_market, mock_event)
+
+        # Assert
+        with self.manager.get_new_session() as session:
+            query = session.query(FundingPayment)
+            added_records: List[FundingPayment] = query.all()
+        self.assertEqual(len(added_records), 1)
+        added_record = added_records[0]
+        self.assertEqual(added_record.timestamp, 2000)
+        self.assertEqual(added_record.config_file_path, self.config_file_path)
+        self.assertEqual(added_record.market, "binance")
+        self.assertEqual(added_record.rate, 0.001)
+        self.assertEqual(added_record.symbol, "BTC-USDT")
+        self.assertEqual(added_record.amount, float(Decimal("10.5")))
+        self.assertEqual(added_record.trade_id, "trade123")
+        self.assertEqual(added_record.price_type, PVPriceType.AVG_ENTRY.value)
+        self.assertEqual(added_record.trade_position_value, float(Decimal("30000")))
+        self.assertEqual(added_record.trade_position_exposure, float(Decimal("30000")))
+
+    def test_records_funding_payment_no_trade_details_out_of_time_window_or_dif_pair(self):
+        # Arrange
+        mock_market = MagicMock()
+        mock_market.display_name = "binance"
+
+        mock_event = MagicMock(spec=FundingPaymentCompletedEvent)
+        mock_event.timestamp = 500
+        mock_event.trading_pair = "BTC-USDT"
+        mock_event.amount = Decimal("10.5")
+        mock_event.funding_rate = Decimal("0.001")
+
+        funding_trade_out_of_time_window = FundingTrade(
+            id="trade123",
+            start_time=1000,
+            end_time=None,
+            long_market="binance",
+            long_pair="BTC-USDT",
+            short_market="binance",
+            short_pair="BTC-USDT",
+        )
+        funding_trade_different_pair = FundingTrade(
+            id="trade1234",
+            start_time=10,
+            end_time=1100,
+            long_market="binance",
+            long_pair="ETH-USDT",
+            short_market="binance",
+            short_pair="ETH-USDT",
+        )
+        with self.manager.get_new_session() as session:
+            session.add(funding_trade_out_of_time_window)
+            session.add(funding_trade_different_pair)
+            session.commit()
+
+        mock_market_pair_info = MagicMock()
+        mock_market_pair_info.price_type = PVPriceType.AVG_ENTRY
+
+        recorder = MarketsRecorder(
+            sql=self.manager,
+            markets=[self],
+            config_file_path=self.config_file_path,
+            strategy_name=self.strategy_name,
+            market_data_collection=MarketDataCollectionConfigMap(
+                market_data_collection_enabled=False,
+                market_data_collection_interval=60,
+                market_data_collection_depth=20,
+            ),
+        )
+        recorder._ev_loop = MagicMock()
+
+        # Act
+        with patch("hummingbot.connector.markets_recorder.get_market_pair_info", return_value=mock_market_pair_info):
+            recorder._did_complete_funding_payment(1, mock_market, mock_event)
+
+        # Assert
+        with self.manager.get_new_session() as session:
+            query = session.query(FundingPayment)
+            added_records: List[FundingPayment] = query.all()
+        self.assertEqual(len(added_records), 1)
+        added_record = added_records[0]
+        self.assertEqual(added_record.timestamp, 500)
+        self.assertEqual(added_record.config_file_path, self.config_file_path)
+        self.assertEqual(added_record.market, "binance")
+        self.assertEqual(added_record.rate, 0.001)
+        self.assertEqual(added_record.symbol, "BTC-USDT")
+        self.assertEqual(added_record.amount, float(Decimal("10.5")))
+        self.assertEqual(added_record.trade_id, None)
+        self.assertEqual(added_record.price_type, PVPriceType.AVG_ENTRY.value)
+        self.assertEqual(added_record.trade_position_value, None)
+        self.assertEqual(added_record.trade_position_exposure, None)
+
+    # Handles different price type calculations (AVG_ENTRY vs other types)
+    def test_handles_different_price_type_calculations(self):
+        # Arrange
+        mock_sql_manager = MagicMock()
+        mock_session = MagicMock()
+        mock_sql_manager.get_new_session.return_value.__enter__.return_value = mock_session
+
+        mock_market = MagicMock()
+        mock_market.display_name = "binance"
+
+        mock_event = MagicMock(spec=FundingPaymentCompletedEvent)
+        mock_event.timestamp = 1234567890
+        mock_event.trading_pair = "BTC-USDT"
+        mock_event.amount = Decimal("10.5")
+        mock_event.funding_rate = Decimal("0.001")
+
+        mock_position_metrics = MagicMock()
+        mock_position_metrics.get_position_size.return_value = Decimal("2.0")
+        mock_position_metrics.get_position_avg_entry_price.return_value = Decimal("50000.0")
+
+        recorder = MarketsRecorder(
+            sql=mock_sql_manager,
+            markets=[mock_market],
+            config_file_path="conf/config.yml",
+            strategy_name="test_strategy",
+            market_data_collection=MarketDataCollectionConfigMap(
+                market_data_collection_enabled=False,
+                market_data_collection_interval=60,
+                market_data_collection_depth=20,
+            ),
+        )
+        recorder._ev_loop = MagicMock()
+        recorder._position_metrics = mock_position_metrics
+
+        # No existing payment record
+        mock_session.query().filter().one_or_none.return_value = None
+
+        # Mock associated trade
+        mock_associated_trade = FundingTrade(
+            id="trade123",
+            start_time=1234567000,
+            end_time=1234568000,
+            long_market="binance",
+            long_pair="BTC-USDT",
+            short_market="binance",
+            short_pair="BTC-USDT",
+        )
+
+        with patch(
+            "hummingbot.model.funding_trade.FundingTrade.find_funding_trade", return_value=mock_associated_trade
+        ):
+            # Test with AVG_ENTRY price type
+            mock_market_pair_info = MagicMock()
+            mock_market_pair_info.price_type = PVPriceType.AVG_ENTRY
+            with patch(
+                "hummingbot.connector.markets_recorder.get_market_pair_info",
+                return_value=mock_market_pair_info,
+            ):
+                # Act
+                recorder._did_complete_funding_payment(1, mock_market, mock_event)
+
+                # Assert for AVG_ENTRY price type
+                mock_session.add.assert_called_once()
+                added_record = mock_session.add.call_args[0][0]
+                self.assertEqual(added_record.price_type, PVPriceType.AVG_ENTRY.value)
+                # For AVG_ENTRY, both values should be position_size * avg_entry_price
+                expected_value = float(Decimal("2.0") * Decimal("50000.0"))
+                self.assertEqual(added_record.trade_position_value, expected_value)
+                self.assertEqual(added_record.trade_position_exposure, expected_value)
+
+            # Reset mocks for second test
+            mock_session.reset_mock()
+
+            # Test with a different price type
+            mock_market_pair_info.price_type = PVPriceType.UNKNOWN
+
+            with patch(
+                "hummingbot.connector.markets_recorder.get_market_pair_info",
+                return_value=mock_market_pair_info,
+            ):
+                # Act again
+                recorder._did_complete_funding_payment(1, mock_market, mock_event)
+
+                # Assert for other price type
+                added_record = mock_session.add.call_args[0][0]
+                self.assertEqual(added_record.price_type, PVPriceType.UNKNOWN.value)
+                # For other price types, position_value is calculated from funding payment
+                expected_position_value = float(Decimal("10.5") / Decimal("0.001"))
+                expected_position_exposure = float(Decimal("2.0") * Decimal("50000.0"))
+                self.assertEqual(added_record.trade_position_value, expected_position_value)
+                self.assertEqual(added_record.trade_position_exposure, expected_position_exposure)
